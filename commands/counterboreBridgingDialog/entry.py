@@ -1,3 +1,4 @@
+import json
 import math
 import os
 
@@ -98,6 +99,7 @@ IS_PROMOTED = True
 # command it will be inserted beside. Not providing the command to position it
 # will insert it at the end.
 WORKSPACE_ID = "FusionSolidEnvironment"
+TAB_ID = "SolidTab"
 PANEL_ID = "SolidModifyPanel"
 COMMAND_BESIDE_ID = "FusionMoveCommand"
 
@@ -108,10 +110,45 @@ ICON_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resource
 # they are not released and garbage collected.
 local_handlers = []
 
+# Tracks which panel the command was added to, for cleanup
+_active_panel_id = None
+_custom_panel_id = None
+
+
+def _load_config():
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'config.json')
+    try:
+        with open(config_path, 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, ValueError):
+        return {}
+
+
+def _get_or_create_custom_panel(panel_id, panel_name):
+    try:
+        workspace = ui.workspaces.itemById(WORKSPACE_ID)
+        if not workspace:
+            return None
+        tab = workspace.toolbarTabs.itemById(TAB_ID)
+        if not tab:
+            return None
+        panel = tab.toolbarPanels.itemById(panel_id)
+        if not panel:
+            panel = tab.toolbarPanels.add(panel_id, panel_name)
+        return panel
+    except:
+        return None
+
 
 # Executed when add-in is run.
 def start():
+    global _active_panel_id, _custom_panel_id
+
     # Create a command Definition.
+    cmd_def = ui.commandDefinitions.itemById(CMD_ID)
+    if cmd_def:
+        cmd_def.deleteMe()
+
     cmd_def = ui.commandDefinitions.addButtonDefinition(
         CMD_ID, CMD_NAME, CMD_Description, ICON_FOLDER
     )
@@ -119,35 +156,47 @@ def start():
     # Define an event handler for the command created event. It will be called when the button is clicked.
     futil.add_handler(cmd_def.commandCreated, command_created)
 
-    # ******** Add a button into the UI so the user can run the command. ********
-    # Get the target workspace the button will be created in.
-    workspace = ui.workspaces.itemById(WORKSPACE_ID)
+    # Determine which panel to place the command in
+    cfg = _load_config()
+    panel = None
 
-    # Get the panel the button will be created in.
-    panel = workspace.toolbarPanels.itemById(PANEL_ID)
+    if cfg.get('use_custom_panel'):
+        panel_id = cfg.get('panel_id', 'ErikBuildPlugins_Panel')
+        panel_name = cfg.get('panel_name', 'ERIKBUILD PLUGINS')
+        _custom_panel_id = panel_id
+        panel = _get_or_create_custom_panel(panel_id, panel_name)
 
-    # Create the button command control in the UI after the specified existing command.
-    control = panel.controls.addCommand(cmd_def, COMMAND_BESIDE_ID, False)
+    if not panel:
+        workspace = ui.workspaces.itemById(WORKSPACE_ID)
+        panel = workspace.toolbarPanels.itemById(PANEL_ID)
 
-    # Specify if the command is promoted to the main toolbar.
-    control.isPromoted = IS_PROMOTED
+    if panel:
+        _active_panel_id = panel.id
+        existing = panel.controls.itemById(CMD_ID)
+        if not existing:
+            control = panel.controls.addCommand(cmd_def)
+            control.isPromoted = IS_PROMOTED
 
 
 # Executed when add-in is stopped.
 def stop():
-    # Get the various UI elements for this command
-    workspace = ui.workspaces.itemById(WORKSPACE_ID)
-    panel = workspace.toolbarPanels.itemById(PANEL_ID)
-    command_control = panel.controls.itemById(CMD_ID)
-    command_definition = ui.commandDefinitions.itemById(CMD_ID)
+    global _active_panel_id, _custom_panel_id
 
-    # Delete the button command control
-    if command_control:
-        command_control.deleteMe()
+    if _active_panel_id:
+        panel = ui.allToolbarPanels.itemById(_active_panel_id)
+        if panel:
+            ctrl = panel.controls.itemById(CMD_ID)
+            if ctrl:
+                ctrl.deleteMe()
+            # Remove the custom panel if no controls remain
+            if _custom_panel_id and _active_panel_id == _custom_panel_id and panel.controls.count == 0:
+                panel.deleteMe()
+        _active_panel_id = None
+        _custom_panel_id = None
 
-    # Delete the command definition
-    if command_definition:
-        command_definition.deleteMe()
+    cmd_def = ui.commandDefinitions.itemById(CMD_ID)
+    if cmd_def:
+        cmd_def.deleteMe()
 
 
 def cutOneFace(
